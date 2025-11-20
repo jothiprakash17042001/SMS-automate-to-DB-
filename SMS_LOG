@@ -1,0 +1,79 @@
+const SHEET_NAME = 'Sheet1';
+
+// ---- DATABASE CONFIG ----
+const HOST = "switchyard.proxy.rlwy.net";
+const PORT = 27296;
+const DB_NAME = "railway";
+const DB_USER = "root";
+const DB_PASS = "zxlRNdazFKrHdMCaglylgWlRlNDcoIRc";
+
+// Use MySQL-compatible params; DO NOT use sslmode=DISABLED
+const DB_URL = `jdbc:mysql://${HOST}:${PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC`;
+
+// ---- TEST CONNECTION (run this once to confirm) ----
+function testDbConnection() {
+  let conn;
+  try {
+    conn = Jdbc.getConnection(DB_URL, DB_USER, DB_PASS);
+    Logger.log('Connected OK');
+    const stmt = conn.createStatement();
+    const rs = stmt.executeQuery('SELECT 1');
+    if (rs.next()) Logger.log('Test query OK: ' + rs.getInt(1));
+    rs.close();
+    stmt.close();
+  } catch (e) {
+    Logger.log('Connection error: ' + e);
+    throw e;
+  } finally {
+    if (conn) conn.close();
+  }
+}
+
+// ---- SYNC FUNCTION ----
+function syncSheetToDb() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const data = sheet.getDataRange().getValues();
+
+  if (data.length < 2) return;
+
+  const header = data[0];
+  const rows   = data.slice(1);
+
+  const colTimestamp = header.indexOf('timestamp');
+  const colSender    = header.indexOf('sender');
+  const colName      = header.indexOf('name');
+  const colMessage   = header.indexOf('message');
+  const colSynced    = header.indexOf('synced');
+
+  if (colSynced === -1) {
+    throw new Error("Add a 'synced' column in the sheet.");
+  }
+
+  let conn;
+  try {
+    conn = Jdbc.getConnection(DB_URL, DB_USER, DB_PASS);
+    const sql = 'INSERT INTO sms_logs (timestamp, sender, name, message) VALUES (?, ?, ?, ?)';
+    const stmt = conn.prepareStatement(sql);
+
+    rows.forEach((row, i) => {
+      const synced = row[colSynced];
+      if (synced) return; // skip already synced
+
+      stmt.setString(1, String(row[colTimestamp] || ''));
+      stmt.setString(2, String(row[colSender] || ''));
+      stmt.setString(3, String(row[colName] || ''));
+      stmt.setString(4, String(row[colMessage] || ''));
+
+      stmt.execute();
+      sheet.getRange(i + 2, colSynced + 1).setValue('YES'); // mark synced
+    });
+
+    stmt.close();
+  } catch (e) {
+    Logger.log('Sync error: ' + e);
+    throw e;
+  } finally {
+    if (conn) conn && conn.close();
+  }
+}
